@@ -49,6 +49,9 @@
   .dirty { font-size:12px; color:var(--warn); }
   #more { display:block; margin:6px auto 30px; }
   .hint { font-size:13px; color:var(--mut); margin:0 0 8px; }
+  .sl { display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:6px 16px; margin:8px 0; }
+  .sl label { display:grid; grid-template-columns:1fr auto; font-size:13px; gap:2px 8px; } .sl input { grid-column:1 / 3; }
+  #mesure { font-size:14px; }
 </style>
 </head>
 <body>
@@ -86,15 +89,30 @@
   <label>Site
     <select id="fSite"><option value="">Tous</option><option value="oui">Vente en ligne détectée</option>
       <option value="probable">Vente en ligne probable</option><option value="non">Site sans vente détectée</option>
+      <option value="inaccessible">Site illisible par le robot</option>
       <option value="aucun">Aucun site trouvé / non vérifié</option></select></label>
   <label>Tri
-    <select id="fSort"><option value="hasard">Ordre aléatoire (à l'aveugle)</option><option value="score">Score décroissant</option>
+    <select id="fSort"><option value="hasard">Ordre aléatoire (à l'aveugle)</option><option value="score">Score pondéré décroissant</option>
       <option value="ca">CA décroissant</option><option value="age">Âge décroissant</option>
       <option value="ajoute">Ajoutées récemment</option><option value="nom">Nom</option></select></label>
   <label class="inline"><input id="fCalib" type="checkbox" checked> Échantillon de calibration seulement</label>
   <label class="inline"><input id="fScore" type="checkbox"> Afficher le score</label>
   <label class="inline"><input id="fFiliale" type="checkbox"> Masquer les noms de filiale probable</label>
 </section>
+
+<details id="pond" class="panel" hidden>
+  <summary><b>Pondération du score (expérimental)</b> – mesurée sur tes étiquettes</summary>
+  <p class="hint">Chaque curseur multiplie les points d'un groupe de critères (0 = ignoré, 1 = normal, 2 = double).
+  La mesure compare le classement du score avec <b>tes</b> décisions sur l'échantillon de calibration (les cibles écartées pour un
+  motif que les données ne voient pas, comme « communautaire », sont exclues). Moins de 30 étiquettes : ne tire aucune conclusion.
+  Évite de sur-régler : un écart d'AUC de moins de 0,05 est du bruit.</p>
+  <div id="sliders" class="sl"></div>
+  <p id="mesure"></p>
+  <div style="display:flex; flex-wrap:wrap; gap:8px;">
+    <button id="btnPoidsReset">Revenir aux poids enregistrés</button>
+    <button id="btnPoidsSave" class="primary">Enregistrer ces poids dans le dépôt</button>
+  </div>
+</details>
 
 <div id="msg">Renseigne le dépôt et le jeton dans « Réglages ».</div>
 <main id="list"></main>
@@ -104,7 +122,11 @@
 "use strict";
 const LS_KEY = "prospection_cfg_v1";
 const MOTIFS = ["B2B / grossiste", "Filiale de groupe", "Pas de vente en ligne", "Hors sujet (activité)",
-                "Trop gros", "Trop petit", "Dirigeant trop jeune", "Autre"];
+                "Trop gros", "Trop petit", "Dirigeant trop jeune",
+                "Communautaire / clientèle de niche", "Non transmissible (activité liée à la personne)",
+                "Produit ou marque sans intérêt", "Autre"];
+// Motifs que les données ne peuvent pas voir : ils n'entrent pas dans la mesure du score
+const NON_OBS = ["Communautaire / clientèle de niche", "Non transmissible (activité liée à la personne)", "Produit ou marque sans intérêt"];
 const STATUTS = [["interessante", "Intéressante"], ["a_creuser", "À creuser"], ["ecartee", "Écartée"], ["courrier", "Courrier envoyé"]];
 const EFFECTIFS = {"00":"0 salarié","01":"1-2 salariés","02":"3-5 salariés","03":"6-9 salariés","11":"10-19 salariés",
   "12":"20-49 salariés","21":"50-99 salariés","22":"100-199 salariés","31":"200-249 salariés","32":"250-499 salariés",
@@ -112,6 +134,7 @@ const EFFECTIFS = {"00":"0 salarié","01":"1-2 salariés","02":"3-5 salariés","
 const PAGE = 30;
 
 let cfg = loadCfg(), cibles = [], decisions = {}, pending = {}, touched = new Set(), shown = PAGE, genere = "";
+let groupes = {}, poidsCfg = {}, poids = {};
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -152,6 +175,8 @@ async function loadAll() {
     if (!a) { setMsg("Fichier data/a_examiner.json introuvable : lance d'abord le workflow.", true); return; }
     const data = JSON.parse(a.text);
     cibles = data.cibles || []; genere = data.genere_le || "";
+    groupes = data.groupes || {}; poidsCfg = Object.assign({}, data.poids || {}); poids = Object.assign({}, poidsCfg);
+    buildSliders();
     const d = await ghGet("data/decisions.json");
     decisions = d && d.text ? JSON.parse(d.text) : {};
     $("filters").hidden = false; $("setup").hidden = true;
@@ -181,12 +206,69 @@ async function saveAll() {
   } catch (e) { setMsg(e.message, true); $("btnSave").disabled = false; }
 }
 
+/* ---------------------------------------------------------------- score pondéré et mesure */
+function spond(c, w) {
+  const t = Object.entries(c.pts || {}).reduce((a, [g, p]) => a + p * (g in w ? w[g] : 1), 0);
+  return Math.floor(t + 0.5);
+}
+function auc(pos, neg) {
+  if (!pos.length || !neg.length) return null;
+  let g = 0; for (const p of pos) for (const n of neg) g += p > n ? 1 : (p === n ? 0.5 : 0);
+  return g / (pos.length * neg.length);
+}
+function mesureAvec(w) {
+  const P = [], N = [];
+  for (const c of cibles) {
+    if (!c.calib) continue;
+    const e = etat(c); if (!e) continue;
+    if (e.statut === "interessante" || e.statut === "a_creuser") P.push(spond(c, w));
+    else if (e.statut === "ecartee" && !NON_OBS.includes(e.motif || "")) N.push(spond(c, w));
+  }
+  const tous = P.map((s) => [s, 1]).concat(N.map((s) => [s, 0])).sort((a, b) => b[0] - a[0]).slice(0, 10);
+  return {auc: auc(P, N), nP: P.length, nN: N.length, top10: tous.reduce((a, x) => a + x[1], 0), nTop: tous.length};
+}
+const f2 = (x) => x == null ? "—" : x.toFixed(2).replace(".", ",");
+function renderMesure() {
+  if (!Object.keys(groupes).length) return;
+  const a = mesureAvec(poids), b = mesureAvec(poidsCfg);
+  let t = `<b>AUC avec ces poids : ${f2(a.auc)}</b> · avec les poids enregistrés : ${f2(b.auc)} · ${a.nP} positives / ${a.nN} écartées mesurables`;
+  if (a.nTop) t += ` · parmi les ${a.nTop} meilleurs scores : ${a.top10} positives`;
+  if (a.nP + a.nN < 30) t += `<br><span class="dirty">Moins de 30 étiquettes mesurables : ne tire aucune conclusion.</span>`;
+  $("mesure").innerHTML = t + `<br><span class="sub">AUC : 0,50 = hasard, 1,00 = le score classe exactement comme toi.</span>`;
+}
+function buildSliders() {
+  $("pond").hidden = !Object.keys(groupes).length;
+  $("sliders").innerHTML = Object.entries(groupes).map(([g, l]) => {
+    const v = g in poids ? poids[g] : 1;
+    return `<label>${esc(l)} <span id="v_${g}">×${v}</span><input type="range" min="0" max="2" step="0.25" value="${v}" data-g="${g}"></label>`;
+  }).join("");
+}
+$("sliders").addEventListener("input", (ev) => {
+  const g = ev.target.dataset.g; if (!g) return;
+  poids[g] = parseFloat(ev.target.value); $("v_" + g).textContent = "×" + poids[g];
+  render();
+});
+$("btnPoidsReset").addEventListener("click", () => { poids = Object.assign({}, poidsCfg); buildSliders(); render(); });
+$("btnPoidsSave").addEventListener("click", async () => {
+  try {
+    setMsg("Enregistrement des poids…");
+    for (let essai = 0; essai < 3; essai++) {
+      const cur = await ghGet("config/poids.json");
+      const res = await ghPut("config/poids.json", JSON.stringify(poids, null, 1), cur ? cur.sha : null, "Poids du score");
+      if (res.status === 200 || res.status === 201) { poidsCfg = Object.assign({}, poids); render(); setMsg("Poids enregistrés : le prochain passage du workflow les appliquera."); return; }
+      if (res.status !== 409 && res.status !== 422) throw new Error("Échec de l'enregistrement des poids (" + res.status + ").");
+    }
+    throw new Error("Conflit persistant sur les poids.");
+  } catch (e) { setMsg(e.message, true); }
+});
+
 /* ---------------------------------------------------------------- filtres et tri */
 function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
 function etat(c) { return pending[c.siren] || decisions[c.siren] || null; }
 function siteClasse(c) {
   if (c.site_conf && c.site && ["confirmé", "nom concordant", "manuel"].includes(c.site_conf)) {
-    if (c.vente === "oui") return "oui"; if (c.vente === "probable") return "probable"; if (c.vente) return "non";
+    if (c.vente === "oui") return "oui"; if (c.vente === "probable") return "probable";
+    if (c.vente === "inaccessible") return "inaccessible"; if (c.vente) return "non";
   }
   return "aucun";
 }
@@ -211,7 +293,7 @@ function filtered() {
     return true;
   });
   const k = $("fSort").value;
-  const cmp = {hasard: (a, b) => hash(a.siren) - hash(b.siren), score: (a, b) => b.score - a.score,
+  const cmp = {hasard: (a, b) => hash(a.siren) - hash(b.siren), score: (a, b) => spond(b, poids) - spond(a, poids),
     ca: (a, b) => (b.ca || 0) - (a.ca || 0), age: (a, b) => (b.age || 0) - (a.age || 0),
     ajoute: (a, b) => (b.ajoute || "").localeCompare(a.ajoute || ""), nom: (a, b) => a.nom.localeCompare(b.nom)}[k];
   return out.sort(cmp);
@@ -229,6 +311,7 @@ function card(c) {
   if (sc === "oui") chips.push(chip("vente en ligne détectée" + (c.plateforme ? " (" + c.plateforme + ")" : ""), "good"));
   else if (sc === "probable") chips.push(chip("vente en ligne probable", "good"));
   else if (sc === "non") chips.push(chip("site sans vente détectée", "warn"));
+  else if (sc === "inaccessible") chips.push(chip("site illisible par le robot : à ouvrir à la main", "warn"));
   else chips.push(chip("pas de site vérifié", "bad"));
   if (c.site_conf === "nom concordant") chips.push(chip("site : nom concordant seulement", "warn"));
   const q = encodeURIComponent(`${c.nom} ${c.ville}`);
@@ -241,7 +324,7 @@ function card(c) {
   ].join("");
   const btns = STATUTS.map(([k, l]) => `<button data-act="set" data-siren="${esc(c.siren)}" data-statut="${k}" class="${s === k ? "on " + k : ""}">${l}</button>`).join("");
   const motif = s === "ecartee" ? `<select data-act="motif" data-siren="${esc(c.siren)}"><option value="">Motif…</option>${MOTIFS.map((m) => `<option ${e && e.motif === m ? "selected" : ""}>${esc(m)}</option>`).join("")}</select>` : "";
-  const score = $("fScore").checked ? `<details class="sc"><summary>Score (expérimental) : ${c.score}</summary>${esc(c.score_detail)}</details>` : "";
+  const score = $("fScore").checked ? `<details class="sc"><summary>Score pondéré (expérimental) : ${spond(c, poids)}</summary>${esc(c.score_detail)} <span class="sub">(points avant pondération)</span></details>` : "";
   return `<article class="card ${s}" data-id="${esc(c.siren)}">
     <h2>${esc(c.nom)} <span class="sub">${esc(c.siren)} · APE ${esc(c.ape)}${c.libelle_ape ? " – " + esc(c.libelle_ape) : ""}</span></h2>
     <div class="sub">${esc(c.cp)} ${esc(c.ville)} · ${esc(c.forme || "forme ?")} · créée ${c.creation || "?"} · ${esc(eff)}</div>
@@ -254,6 +337,7 @@ function card(c) {
       <div><b>Signaux</b> ${esc(c.signaux) || "—"}</div>
     </div>
     <div class="links">${links}</div>
+    ${c.site_autres ? `<details class="sc"><summary>Sites examinés par le robot</summary>${esc(c.site_autres)}</details>` : ""}
     ${score}
     <div class="actions">${btns}${motif}${dirty ? '<span class="dirty">non enregistré</span>' : ""}</div>
     <textarea class="note" data-act="note" data-siren="${esc(c.siren)}" placeholder="Note…">${esc(e ? e.note || "" : "")}</textarea>
@@ -266,6 +350,7 @@ function render() {
   $("more").hidden = list.length <= shown;
   const n = Object.keys(pending).length;
   $("btnSave").textContent = `Enregistrer (${n})`; $("btnSave").disabled = n === 0;
+  renderMesure();
   if (!list.length) setMsg("Aucune cible ne correspond à ces filtres.");
 }
 
