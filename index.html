@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Prospection – cibles à examiner</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --txt:#1c2330; --mut:#667085; --bd:#d9dde5; --acc:#1d5fd1;
+          --ok:#1a7f4b; --warn:#b26a00; --ko:#b3261e; --chip:#eef1f6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12151b; --card:#1b2029; --txt:#e8ebf1; --mut:#97a0b2; --bd:#2b3240; --acc:#6aa0ff;
+            --ok:#4cc38a; --warn:#f0a73a; --ko:#ff7b72; --chip:#262d3a; } }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--txt); }
+  header { position:sticky; top:0; z-index:5; background:var(--card); border-bottom:1px solid var(--bd);
+           padding:10px 14px; display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+  header h1 { font-size:17px; margin:0; flex:1 1 220px; }
+  button, select, input, textarea { font:inherit; color:inherit; }
+  button { border:1px solid var(--bd); background:var(--card); border-radius:8px; padding:6px 12px; cursor:pointer; }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#fff; }
+  button:disabled { opacity:.5; cursor:default; }
+  input, select, textarea { background:var(--card); border:1px solid var(--bd); border-radius:8px; padding:6px 8px; }
+  section.panel { margin:12px 14px; padding:12px 14px; background:var(--card); border:1px solid var(--bd); border-radius:10px; }
+  #filters { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:8px 10px; align-items:end; }
+  #filters label { display:flex; flex-direction:column; font-size:12px; color:var(--mut); gap:3px; }
+  #filters label.inline { flex-direction:row; align-items:center; gap:6px; font-size:13px; color:var(--txt); }
+  #msg { margin:8px 14px; color:var(--mut); }
+  #msg.err { color:var(--ko); }
+  #list { padding:0 14px 40px; display:grid; gap:12px; }
+  .card { background:var(--card); border:1px solid var(--bd); border-radius:12px; padding:12px 14px; border-left:5px solid var(--bd); }
+  .card.interessante { border-left-color:var(--ok); } .card.a_creuser { border-left-color:var(--warn); }
+  .card.ecartee { border-left-color:var(--ko); opacity:.8; } .card.courrier { border-left-color:var(--acc); }
+  .card h2 { font-size:16px; margin:0 0 2px; display:flex; flex-wrap:wrap; gap:6px; align-items:baseline; }
+  .sub { color:var(--mut); font-size:13px; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; }
+  .chip { background:var(--chip); border-radius:999px; padding:2px 9px; font-size:12px; }
+  .chip.good { color:var(--ok); } .chip.warn { color:var(--warn); } .chip.bad { color:var(--ko); }
+  .facts { display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:4px 14px; font-size:13.5px; margin:6px 0; }
+  .facts b { color:var(--mut); font-weight:500; }
+  .links a { margin-right:12px; color:var(--acc); text-decoration:none; font-size:13.5px; }
+  .links a:hover { text-decoration:underline; }
+  .actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; align-items:center; }
+  .actions button.on { color:#fff; border-color:transparent; }
+  .actions button.on.interessante { background:var(--ok); } .actions button.on.a_creuser { background:var(--warn); }
+  .actions button.on.ecartee { background:var(--ko); } .actions button.on.courrier { background:var(--acc); }
+  .note { width:100%; margin-top:6px; min-height:34px; resize:vertical; }
+  details.sc { font-size:12.5px; color:var(--mut); margin-top:6px; }
+  .dirty { font-size:12px; color:var(--warn); }
+  #more { display:block; margin:6px auto 30px; }
+  .hint { font-size:13px; color:var(--mut); margin:0 0 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Cibles à examiner <span id="count" class="sub"></span></h1>
+  <button id="btnSettings">Réglages</button>
+  <button id="btnReload">Recharger</button>
+  <button id="btnSave" class="primary" disabled>Enregistrer (0)</button>
+</header>
+
+<section id="setup" class="panel" hidden>
+  <p class="hint">Dépôt privé qui contient les données, et jeton d'accès (créé dans GitHub : Settings &gt; Developer settings &gt;
+  Fine-grained tokens, limité à ce seul dépôt, permission « Contents : Read and write »). Ils restent uniquement dans ce navigateur.</p>
+  <div style="display:flex; flex-wrap:wrap; gap:8px;">
+    <input id="inRepo" placeholder="proprietaire/depot" size="28" value="fabiendaumale-fr/prospection">
+    <input id="inToken" type="password" placeholder="Jeton github_pat_..." size="40">
+    <button id="btnCfgSave" class="primary">Valider</button>
+    <button id="btnCfgClear">Effacer le jeton de ce navigateur</button>
+  </div>
+</section>
+
+<section id="filters" class="panel" hidden>
+  <label>Recherche<input id="fText" placeholder="nom, SIREN, ville, APE"></label>
+  <label>Statut
+    <select id="fStatut">
+      <option value="none">À examiner (sans décision)</option><option value="all">Toutes</option>
+      <option value="interessante">Intéressantes</option><option value="a_creuser">À creuser</option>
+      <option value="ecartee">Écartées</option><option value="courrier">Courrier envoyé</option>
+    </select></label>
+  <label>Départements<input id="fDep" placeholder="ex : 78,92"></label>
+  <label>APE commence par<input id="fApe" placeholder="ex : 47, 4791"></label>
+  <label>CA min (k€)<input id="fCaMin" type="number" min="0"></label>
+  <label>CA max (k€)<input id="fCaMax" type="number" min="0"></label>
+  <label>Âge min<input id="fAge" type="number" min="0"></label>
+  <label>Site
+    <select id="fSite"><option value="">Tous</option><option value="oui">Vente en ligne détectée</option>
+      <option value="probable">Vente en ligne probable</option><option value="non">Site sans vente détectée</option>
+      <option value="aucun">Aucun site trouvé / non vérifié</option></select></label>
+  <label>Tri
+    <select id="fSort"><option value="hasard">Ordre aléatoire (à l'aveugle)</option><option value="score">Score décroissant</option>
+      <option value="ca">CA décroissant</option><option value="age">Âge décroissant</option>
+      <option value="ajoute">Ajoutées récemment</option><option value="nom">Nom</option></select></label>
+  <label class="inline"><input id="fCalib" type="checkbox" checked> Échantillon de calibration seulement</label>
+  <label class="inline"><input id="fScore" type="checkbox"> Afficher le score</label>
+  <label class="inline"><input id="fFiliale" type="checkbox"> Masquer les noms de filiale probable</label>
+</section>
+
+<div id="msg">Renseigne le dépôt et le jeton dans « Réglages ».</div>
+<main id="list"></main>
+<button id="more" hidden>Afficher la suite</button>
+
+<script>
+"use strict";
+const LS_KEY = "prospection_cfg_v1";
+const MOTIFS = ["B2B / grossiste", "Filiale de groupe", "Pas de vente en ligne", "Hors sujet (activité)",
+                "Trop gros", "Trop petit", "Dirigeant trop jeune", "Autre"];
+const STATUTS = [["interessante", "Intéressante"], ["a_creuser", "À creuser"], ["ecartee", "Écartée"], ["courrier", "Courrier envoyé"]];
+const EFFECTIFS = {"00":"0 salarié","01":"1-2 salariés","02":"3-5 salariés","03":"6-9 salariés","11":"10-19 salariés",
+  "12":"20-49 salariés","21":"50-99 salariés","22":"100-199 salariés","31":"200-249 salariés","32":"250-499 salariés",
+  "41":"500-999 salariés","NN":"non employeuse"};
+const PAGE = 30;
+
+let cfg = loadCfg(), cibles = [], decisions = {}, pending = {}, touched = new Set(), shown = PAGE, genere = "";
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtEur = (n) => n == null ? "?" : (n >= 1e6 ? (n / 1e6).toFixed(2).replace(".", ",") + " M€" : Math.round(n / 1000) + " k€");
+
+function loadCfg() { try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { return {}; } }
+function saveCfg() { try { localStorage.setItem(LS_KEY, JSON.stringify(cfg)); } catch (e) { /* stockage indisponible */ } }
+function setMsg(t, err) { const m = $("msg"); m.textContent = t; m.className = err ? "err" : ""; }
+
+/* ---------------------------------------------------------------- API GitHub */
+function b64enc(str) { const b = new TextEncoder().encode(str); let s = ""; b.forEach((x) => s += String.fromCharCode(x)); return btoa(s); }
+function b64dec(b64) { const s = atob(b64.replace(/\s/g, "")); const a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); return new TextDecoder().decode(a); }
+function hdr(accept) {
+  return {"Authorization": "Bearer " + cfg.token, "Accept": accept || "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"};
+}
+async function ghGet(path, raw) {
+  const r = await fetch(`https://api.github.com/repos/${cfg.repo}/contents/${path}`, {headers: hdr(raw ? "application/vnd.github.raw+json" : null)});
+  if (r.status === 404) return null;
+  if (r.status === 401 || r.status === 403) throw new Error("Jeton refusé ou droits insuffisants (" + r.status + ").");
+  if (!r.ok) throw new Error("Erreur GitHub " + r.status + " sur " + path);
+  if (raw) return {text: await r.text(), sha: null};
+  const j = await r.json();
+  let text = j.content && j.encoding === "base64" ? b64dec(j.content) : null;
+  if (text === null) { const rr = await ghGet(path, true); text = rr ? rr.text : ""; }
+  return {text, sha: j.sha};
+}
+async function ghPut(path, text, sha, message) {
+  const body = {message, content: b64enc(text)};
+  if (sha) body.sha = sha;
+  return fetch(`https://api.github.com/repos/${cfg.repo}/contents/${path}`, {method: "PUT", headers: Object.assign({"Content-Type": "application/json"}, hdr()), body: JSON.stringify(body)});
+}
+
+async function loadAll() {
+  if (!cfg.repo || !cfg.token) { $("setup").hidden = false; return; }
+  setMsg("Chargement…");
+  try {
+    const a = await ghGet("data/a_examiner.json", true);
+    if (!a) { setMsg("Fichier data/a_examiner.json introuvable : lance d'abord le workflow.", true); return; }
+    const data = JSON.parse(a.text);
+    cibles = data.cibles || []; genere = data.genere_le || "";
+    const d = await ghGet("data/decisions.json");
+    decisions = d && d.text ? JSON.parse(d.text) : {};
+    $("filters").hidden = false; $("setup").hidden = true;
+    shown = PAGE; render(); setMsg("");
+  } catch (e) { setMsg(e.message, true); $("setup").hidden = false; }
+}
+
+async function saveAll() {
+  const ids = Object.keys(pending);
+  if (!ids.length) return;
+  $("btnSave").disabled = true; setMsg("Enregistrement…");
+  try {
+    for (let essai = 0; essai < 3; essai++) {
+      const cur = await ghGet("data/decisions.json");
+      const remote = cur && cur.text ? JSON.parse(cur.text) : {};
+      const merged = Object.assign({}, remote);
+      const now = new Date().toISOString();
+      for (const id of ids) merged[id] = Object.assign({}, pending[id], {maj: now});
+      const res = await ghPut("data/decisions.json", JSON.stringify(merged, null, 1), cur ? cur.sha : null,
+                              `Décisions : ${ids.length} cible(s)`);
+      if (res.status === 200 || res.status === 201) {
+        decisions = merged; pending = {}; render(); setMsg("Enregistré (" + ids.length + " décision(s))."); return;
+      }
+      if (res.status !== 409 && res.status !== 422) throw new Error("Échec de l'enregistrement (" + res.status + ").");
+    }
+    throw new Error("Conflit persistant : recharge la page et recommence.");
+  } catch (e) { setMsg(e.message, true); $("btnSave").disabled = false; }
+}
+
+/* ---------------------------------------------------------------- filtres et tri */
+function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
+function etat(c) { return pending[c.siren] || decisions[c.siren] || null; }
+function siteClasse(c) {
+  if (c.site_conf && c.site && ["confirmé", "nom concordant", "manuel"].includes(c.site_conf)) {
+    if (c.vente === "oui") return "oui"; if (c.vente === "probable") return "probable"; if (c.vente) return "non";
+  }
+  return "aucun";
+}
+function filtered() {
+  const t = $("fText").value.trim().toLowerCase(), st = $("fStatut").value, apes = $("fApe").value.split(",").map((x) => x.trim()).filter(Boolean);
+  const deps = $("fDep").value.split(",").map((x) => x.trim()).filter(Boolean);
+  const caMin = parseFloat($("fCaMin").value), caMax = parseFloat($("fCaMax").value), ageMin = parseFloat($("fAge").value);
+  const site = $("fSite").value, calib = $("fCalib").checked, noFil = $("fFiliale").checked;
+  let out = cibles.filter((c) => {
+    const e = etat(c), s = e ? e.statut : null;
+    if (st === "none" && s && !touched.has(c.siren)) return false;  // une carte qu'on vient de traiter reste visible
+    if (st !== "none" && st !== "all" && s !== st) return false;
+    if (calib && !c.calib) return false;
+    if (noFil && c.filiale) return false;
+    if (t && !(`${c.nom} ${c.siren} ${c.ville} ${c.ape} ${c.cp}`).toLowerCase().includes(t)) return false;
+    if (apes.length && !apes.some((a) => (c.ape || "").startsWith(a))) return false;
+    if (deps.length && !deps.some((d) => (c.cp || "").startsWith(d))) return false;
+    if (!isNaN(caMin) && !(c.ca != null && c.ca >= caMin * 1000)) return false;
+    if (!isNaN(caMax) && !(c.ca != null && c.ca <= caMax * 1000)) return false;
+    if (!isNaN(ageMin) && !(c.age != null && c.age >= ageMin)) return false;
+    if (site && siteClasse(c) !== site) return false;
+    return true;
+  });
+  const k = $("fSort").value;
+  const cmp = {hasard: (a, b) => hash(a.siren) - hash(b.siren), score: (a, b) => b.score - a.score,
+    ca: (a, b) => (b.ca || 0) - (a.ca || 0), age: (a, b) => (b.age || 0) - (a.age || 0),
+    ajoute: (a, b) => (b.ajoute || "").localeCompare(a.ajoute || ""), nom: (a, b) => a.nom.localeCompare(b.nom)}[k];
+  return out.sort(cmp);
+}
+
+/* ---------------------------------------------------------------- affichage */
+function chip(t, cls) { return `<span class="chip ${cls || ""}">${esc(t)}</span>`; }
+function card(c) {
+  const e = etat(c), s = e ? e.statut : "", dirty = !!pending[c.siren];
+  const eff = EFFECTIFS[c.effectif] || c.effectif || "effectif inconnu";
+  const chips = [];
+  if (c.filiale) chips.push(chip("nom de filiale probable", "warn"));
+  if (c.holding) chips.push(chip("holding : " + c.holding, ""));
+  const sc = siteClasse(c);
+  if (sc === "oui") chips.push(chip("vente en ligne détectée" + (c.plateforme ? " (" + c.plateforme + ")" : ""), "good"));
+  else if (sc === "probable") chips.push(chip("vente en ligne probable", "good"));
+  else if (sc === "non") chips.push(chip("site sans vente détectée", "warn"));
+  else chips.push(chip("pas de site vérifié", "bad"));
+  if (c.site_conf === "nom concordant") chips.push(chip("site : nom concordant seulement", "warn"));
+  const q = encodeURIComponent(`${c.nom} ${c.ville}`);
+  const links = [
+    c.site ? `<a href="https://${esc(c.site)}" target="_blank" rel="noopener">Site</a>` : "",
+    `<a href="https://www.pappers.fr/entreprise/${esc(c.siren)}" target="_blank" rel="noopener">Pappers</a>`,
+    `<a href="https://annuaire-entreprises.data.gouv.fr/entreprise/${esc(c.siren)}" target="_blank" rel="noopener">Annuaire officiel</a>`,
+    `<a href="https://www.google.com/maps/search/?api=1&query=${q}" target="_blank" rel="noopener">Maps</a>`,
+    `<a href="https://www.google.com/search?q=${q}" target="_blank" rel="noopener">Google</a>`,
+  ].join("");
+  const btns = STATUTS.map(([k, l]) => `<button data-act="set" data-siren="${esc(c.siren)}" data-statut="${k}" class="${s === k ? "on " + k : ""}">${l}</button>`).join("");
+  const motif = s === "ecartee" ? `<select data-act="motif" data-siren="${esc(c.siren)}"><option value="">Motif…</option>${MOTIFS.map((m) => `<option ${e && e.motif === m ? "selected" : ""}>${esc(m)}</option>`).join("")}</select>` : "";
+  const score = $("fScore").checked ? `<details class="sc"><summary>Score (expérimental) : ${c.score}</summary>${esc(c.score_detail)}</details>` : "";
+  return `<article class="card ${s}" data-id="${esc(c.siren)}">
+    <h2>${esc(c.nom)} <span class="sub">${esc(c.siren)} · APE ${esc(c.ape)}${c.libelle_ape ? " – " + esc(c.libelle_ape) : ""}</span></h2>
+    <div class="sub">${esc(c.cp)} ${esc(c.ville)} · ${esc(c.forme || "forme ?")} · créée ${c.creation || "?"} · ${esc(eff)}</div>
+    <div class="chips">${chips.join("")}</div>
+    <div class="facts">
+      <div><b>CA</b> ${fmtEur(c.ca)}${c.ca_est ? " (estimé)" : ""}${c.annee_comptes ? " · comptes " + c.annee_comptes : ""}</div>
+      <div><b>Résultat net</b> ${c.resultat == null ? "?" : fmtEur(c.resultat)}${c.marge != null ? " (" + c.marge + " %)" : ""} <span class="sub">– peu parlant pour une TPE</span></div>
+      <div><b>Dirigeants</b> ${esc(c.dirigeants) || "—"}</div>
+      ${c.holding_dirigeants ? `<div><b>Dirigeants de la holding</b> ${esc(c.holding_dirigeants)}</div>` : ""}
+      <div><b>Signaux</b> ${esc(c.signaux) || "—"}</div>
+    </div>
+    <div class="links">${links}</div>
+    ${score}
+    <div class="actions">${btns}${motif}${dirty ? '<span class="dirty">non enregistré</span>' : ""}</div>
+    <textarea class="note" data-act="note" data-siren="${esc(c.siren)}" placeholder="Note…">${esc(e ? e.note || "" : "")}</textarea>
+  </article>`;
+}
+function render() {
+  const list = filtered();
+  $("count").textContent = `· ${list.length} affichée(s) / ${cibles.length}${genere ? " · données du " + genere : ""}`;
+  $("list").innerHTML = list.slice(0, shown).map(card).join("");
+  $("more").hidden = list.length <= shown;
+  const n = Object.keys(pending).length;
+  $("btnSave").textContent = `Enregistrer (${n})`; $("btnSave").disabled = n === 0;
+  if (!list.length) setMsg("Aucune cible ne correspond à ces filtres.");
+}
+
+/* ---------------------------------------------------------------- événements */
+function setDecision(siren, patch) {
+  touched.add(siren);
+  const base = pending[siren] || Object.assign({}, decisions[siren] || {});
+  pending[siren] = Object.assign(base, patch);
+}
+$("list").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button[data-act='set']"); if (!b) return;
+  const siren = b.dataset.siren, cur = etat(cibles.find((c) => c.siren === siren));
+  const statut = cur && cur.statut === b.dataset.statut ? "" : b.dataset.statut;  // second clic : annule
+  setDecision(siren, {statut, motif: statut === "ecartee" ? (cur && cur.motif) || "" : ""});
+  const y = window.scrollY; render(); window.scrollTo(0, y);
+});
+$("list").addEventListener("change", (ev) => {
+  const el = ev.target;
+  if (el.dataset.act === "motif") { setDecision(el.dataset.siren, {motif: el.value}); updSave(); }
+});
+$("list").addEventListener("input", (ev) => {
+  const el = ev.target;
+  if (el.dataset.act === "note") { setDecision(el.dataset.siren, {note: el.value}); updSave(); }
+});
+function updSave() { const n = Object.keys(pending).length; $("btnSave").textContent = `Enregistrer (${n})`; $("btnSave").disabled = n === 0; }
+$("btnSave").addEventListener("click", saveAll);
+$("btnReload").addEventListener("click", () => { if (Object.keys(pending).length && !confirm("Des décisions ne sont pas enregistrées : les perdre ?")) return; pending = {}; touched.clear(); loadAll(); });
+$("btnSettings").addEventListener("click", () => { $("setup").hidden = !$("setup").hidden; });
+$("btnCfgSave").addEventListener("click", () => { cfg = {repo: $("inRepo").value.trim(), token: $("inToken").value.trim()}; saveCfg(); loadAll(); });
+$("btnCfgClear").addEventListener("click", () => { cfg = {repo: cfg.repo}; saveCfg(); $("inToken").value = ""; setMsg("Jeton effacé de ce navigateur."); });
+$("more").addEventListener("click", () => { shown += PAGE; render(); });
+["fText", "fStatut", "fDep", "fApe", "fCaMin", "fCaMax", "fAge", "fSite", "fSort", "fCalib", "fScore", "fFiliale"].forEach((id) =>
+  $(id).addEventListener("input", () => { shown = PAGE; touched.clear(); render(); }));
+window.addEventListener("beforeunload", (e) => { if (Object.keys(pending).length) { e.preventDefault(); e.returnValue = ""; } });
+
+if (cfg.repo) $("inRepo").value = cfg.repo;
+loadAll();
+</script>
+</body>
+</html>
