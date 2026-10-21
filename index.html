@@ -90,7 +90,8 @@
     <select id="fSite"><option value="">Tous</option><option value="oui">Vente en ligne détectée</option>
       <option value="probable">Vente en ligne probable</option><option value="non">Site sans vente détectée</option>
       <option value="inaccessible">Site illisible par le robot</option>
-      <option value="aucun">Aucun site trouvé / non vérifié</option></select></label>
+      <option value="aucun">Aucun site trouvé</option>
+      <option value="non_cherche">Pas encore recherché</option></select></label>
   <label>Tri
     <select id="fSort"><option value="hasard">Ordre aléatoire (à l'aveugle)</option><option value="score">Score pondéré décroissant</option>
       <option value="ca">CA décroissant</option><option value="age">Âge décroissant</option>
@@ -271,7 +272,7 @@ function siteClasse(c) {
     if (c.vente === "oui") return "oui"; if (c.vente === "probable") return "probable";
     if (c.vente === "inaccessible") return "inaccessible"; if (c.vente) return "non";
   }
-  return "aucun";
+  return c.site_etat === "non_cherche" ? "non_cherche" : "aucun";
 }
 function filtered() {
   const t = $("fText").value.trim().toLowerCase(), st = $("fStatut").value, apes = $("fApe").value.split(",").map((x) => x.trim()).filter(Boolean);
@@ -314,7 +315,8 @@ function card(c) {
   else if (sc === "probable") chips.push(chip("vente en ligne probable", "good"));
   else if (sc === "non") chips.push(chip("site sans vente détectée", "warn"));
   else if (sc === "inaccessible") chips.push(chip("site illisible par le robot : à ouvrir à la main", "warn"));
-  else chips.push(chip("pas de site vérifié", "bad"));
+  else if (sc === "non_cherche") chips.push(chip("site pas encore recherché", "warn"));
+  else chips.push(chip("aucun site trouvé (fiche Google + recherche web)", "bad"));
   if (c.site_conf === "nom concordant") chips.push(chip("site : nom concordant seulement", "warn"));
   if (c.site_conf === "fiche Google") chips.push(chip("site déclaré sur la fiche Google", "good"));
   const q = encodeURIComponent(`${c.nom} ${c.ville}`);
