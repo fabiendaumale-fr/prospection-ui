@@ -266,7 +266,7 @@ $("btnPoidsSave").addEventListener("click", async () => {
 function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
 function etat(c) { return pending[c.siren] || decisions[c.siren] || null; }
 function siteClasse(c) {
-  if (c.site_conf && c.site && ["confirmé", "nom concordant", "manuel"].includes(c.site_conf)) {
+  if (c.site_conf && c.site && ["confirmé", "fiche Google", "nom concordant", "manuel"].includes(c.site_conf)) {
     if (c.vente === "oui") return "oui"; if (c.vente === "probable") return "probable";
     if (c.vente === "inaccessible") return "inaccessible"; if (c.vente) return "non";
   }
@@ -314,6 +314,7 @@ function card(c) {
   else if (sc === "inaccessible") chips.push(chip("site illisible par le robot : à ouvrir à la main", "warn"));
   else chips.push(chip("pas de site vérifié", "bad"));
   if (c.site_conf === "nom concordant") chips.push(chip("site : nom concordant seulement", "warn"));
+  if (c.site_conf === "fiche Google") chips.push(chip("site déclaré sur la fiche Google", "good"));
   const q = encodeURIComponent(`${c.nom} ${c.ville}`);
   const links = [
     c.site ? `<a href="https://${esc(c.site)}" target="_blank" rel="noopener">Site</a>` : "",
