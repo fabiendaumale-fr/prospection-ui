@@ -98,6 +98,7 @@
   <label class="inline"><input id="fCalib" type="checkbox" checked> Échantillon de calibration seulement</label>
   <label class="inline"><input id="fScore" type="checkbox"> Afficher le score</label>
   <label class="inline"><input id="fFiliale" type="checkbox"> Masquer les noms de filiale probable</label>
+  <label class="inline"><input id="fPhysique" type="checkbox" checked> Masquer pharmacies, supermarchés, boucheries…</label>
 </section>
 
 <details id="pond" class="panel" hidden>
@@ -276,13 +277,14 @@ function filtered() {
   const t = $("fText").value.trim().toLowerCase(), st = $("fStatut").value, apes = $("fApe").value.split(",").map((x) => x.trim()).filter(Boolean);
   const deps = $("fDep").value.split(",").map((x) => x.trim()).filter(Boolean);
   const caMin = parseFloat($("fCaMin").value), caMax = parseFloat($("fCaMax").value), ageMin = parseFloat($("fAge").value);
-  const site = $("fSite").value, calib = $("fCalib").checked, noFil = $("fFiliale").checked;
+  const site = $("fSite").value, calib = $("fCalib").checked, noFil = $("fFiliale").checked, noPhys = $("fPhysique").checked;
   let out = cibles.filter((c) => {
     const e = etat(c), s = e ? e.statut : null;
     if (st === "none" && s && !touched.has(c.siren)) return false;  // une carte qu'on vient de traiter reste visible
     if (st !== "none" && st !== "all" && s !== st) return false;
     if (calib && !c.calib) return false;
     if (noFil && c.filiale) return false;
+    if (noPhys && c.physique) return false;
     if (t && !(`${c.nom} ${c.siren} ${c.ville} ${c.ape} ${c.cp}`).toLowerCase().includes(t)) return false;
     if (apes.length && !apes.some((a) => (c.ape || "").startsWith(a))) return false;
     if (deps.length && !deps.some((d) => (c.cp || "").startsWith(d))) return false;
@@ -383,7 +385,7 @@ $("btnSettings").addEventListener("click", () => { $("setup").hidden = !$("setup
 $("btnCfgSave").addEventListener("click", () => { cfg = {repo: $("inRepo").value.trim(), token: $("inToken").value.trim()}; saveCfg(); loadAll(); });
 $("btnCfgClear").addEventListener("click", () => { cfg = {repo: cfg.repo}; saveCfg(); $("inToken").value = ""; setMsg("Jeton effacé de ce navigateur."); });
 $("more").addEventListener("click", () => { shown += PAGE; render(); });
-["fText", "fStatut", "fDep", "fApe", "fCaMin", "fCaMax", "fAge", "fSite", "fSort", "fCalib", "fScore", "fFiliale"].forEach((id) =>
+["fText", "fStatut", "fDep", "fApe", "fCaMin", "fCaMax", "fAge", "fSite", "fSort", "fCalib", "fScore", "fFiliale", "fPhysique"].forEach((id) =>
   $(id).addEventListener("input", () => { shown = PAGE; touched.clear(); render(); }));
 window.addEventListener("beforeunload", (e) => { if (Object.keys(pending).length) { e.preventDefault(); e.returnValue = ""; } });
 
