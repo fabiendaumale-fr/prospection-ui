@@ -124,7 +124,7 @@
   <summary><b>Courrier : mes coordonnées et le modèle de lettre</b></summary>
   <p class="hint">Enregistrés uniquement dans ce navigateur (jamais dans le dépôt). Le bouton « Lettre » d'une cible ouvre la lettre
   prête à imprimer ou à enregistrer en PDF. Variables : {{expediteur_nom}} {{expediteur_adresse}} {{expediteur_ville}}
-  {{expediteur_email}} {{expediteur_tel}} {{destinataire}} {{societe}} {{adresse}} {{cp_ville}} {{date}} {{depuis}}.</p>
+  {{expediteur_email}} {{expediteur_tel}} {{parcours}} {{destinataire}} {{societe}} {{adresse}} {{cp_ville}} {{date}} {{depuis}}.</p>
   <div class="cr">
     <input id="cNom" placeholder="Ton prénom et nom">
     <input id="cAdresse" placeholder="Ton adresse (rue, code postal, ville)">
@@ -132,6 +132,8 @@
     <input id="cEmail" placeholder="Email dédié">
     <input id="cTel" placeholder="Téléphone">
   </div>
+  <label class="sub" for="cParcours">Mon parcours en une ou deux phrases (variable {{parcours}} de la lettre). Exemple : « J'ai fondé et dirigé pendant douze ans une société de [secteur], que j'ai cédée en [année]. » N'écris que ce qui est exact : ce sera lu par le dirigeant.</label>
+  <textarea id="cParcours" rows="3" style="width:100%; margin-bottom:8px;"></textarea>
   <textarea id="cModele"></textarea>
   <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;">
     <button id="btnCourrierSave" class="primary">Enregistrer</button>
@@ -161,7 +163,7 @@ const PAGE = 30;
 let cfg = loadCfg(), cibles = [], decisions = {}, pending = {}, touched = new Set(), shown = PAGE, genere = "";
 let groupes = {}, poidsCfg = {}, poids = {};
 const CR_KEY = "prospection_courrier_v1";
-const MODELE_DEFAUT = `{{expediteur_nom}}
+const MODELE_V1 = `{{expediteur_nom}}
 {{expediteur_adresse}}
 {{expediteur_email}} · {{expediteur_tel}}
 
@@ -186,8 +188,82 @@ Je vous prie d'agréer, Madame, Monsieur, l'expression de mes salutations distin
 
 {{expediteur_nom}}
 
+Vos coordonnées proviennent du registre public des sociétés. Pour ne plus être contacté : {{expediteur_email}}.`;   // premier modèle livré : remplacé automatiquement s'il n'a pas été modifié
+const MODELE_V2 = `{{expediteur_nom}}
+{{expediteur_adresse}}
+{{expediteur_email}} · {{expediteur_tel}}
+
+{{destinataire}}
+{{societe}}
+{{adresse}}
+{{cp_ville}}
+
+{{expediteur_ville}}, le {{date}}
+
+Objet : Reprise de {{societe}} – un repreneur entrepreneur, financement prévu
+
+Madame, Monsieur,
+
+{{parcours}}
+
+Fort de cette expérience, je cherche aujourd'hui à reprendre une entreprise pour la développer dans la durée. {{societe}}{{depuis}} a retenu mon attention.
+
+Ce que je peux vous apporter :
+
+• La compréhension d'un dirigeant qui est passé par là. J'ai moi-même vécu la cession de mon entreprise : je sais ce qu'elle représente et l'importance de la continuité, pour vos équipes, vos clients et ce que vous avez construit.
+
+• Une capacité de financement. Je dispose d'un apport personnel et de contacts bancaires qui me permettent de mener une opération jusqu'à son terme, dans des délais maîtrisés.
+
+Rien ne presse et rien ne vous engage. Si le sujet est d'actualité pour vous, ou le sera dans un an ou deux, je serais heureux d'en discuter, en toute confidentialité et sans intermédiaire. Dans le cas contraire, ce courrier n'appelle aucune réponse.
+
+Je reste joignable au {{expediteur_tel}} ou à {{expediteur_email}}.
+
+Je vous prie d'agréer, Madame, Monsieur, l'expression de mes salutations distinguées.
+
+{{expediteur_nom}}
+
+Vos coordonnées proviennent du registre public des sociétés. Pour ne plus être contacté : {{expediteur_email}}.`;   // deuxième modèle livré (objet « accrocheur »)
+const MODELE_DEFAUT = `{{expediteur_nom}}
+{{expediteur_adresse}}
+{{expediteur_email}} · {{expediteur_tel}}
+
+{{destinataire}}
+{{societe}}
+{{adresse}}
+{{cp_ville}}
+
+{{expediteur_ville}}, le {{date}}
+
+Objet : Démarche de reprise de {{societe}} – confidentiel
+
+Madame, Monsieur,
+
+{{parcours}}
+
+Fort de cette expérience, je cherche aujourd'hui à reprendre une entreprise pour la développer dans la durée. {{societe}}{{depuis}} a retenu mon attention.
+
+Ce que je peux vous apporter :
+
+• La compréhension d'un dirigeant qui est passé par là. J'ai moi-même vécu la cession de mon entreprise : je sais ce qu'elle représente et l'importance de la continuité, pour vos équipes, vos clients et ce que vous avez construit.
+
+• Une capacité de financement. Je dispose d'un apport personnel et de contacts bancaires qui me permettent de mener une opération jusqu'à son terme, dans des délais maîtrisés.
+
+Rien ne presse et rien ne vous engage. Si le sujet est d'actualité pour vous, ou le sera dans un an ou deux, je serais heureux d'en discuter, en toute confidentialité et sans intermédiaire. Dans le cas contraire, ce courrier n'appelle aucune réponse.
+
+Je reste joignable au {{expediteur_tel}} ou à {{expediteur_email}}.
+
+Je vous prie d'agréer, Madame, Monsieur, l'expression de mes salutations distinguées.
+
+{{expediteur_nom}}
+
 Vos coordonnées proviennent du registre public des sociétés. Pour ne plus être contacté : {{expediteur_email}}.`;
-let courrier = (() => { try { return JSON.parse(localStorage.getItem(CR_KEY)) || {}; } catch (e) { return {}; } })();
+let courrier = (() => {
+  try {
+    const c = JSON.parse(localStorage.getItem(CR_KEY)) || {};
+    if (c.modele === MODELE_V1 || c.modele === MODELE_V2) delete c.modele;   // ancien modèle jamais retouché : on passe au nouveau
+    return c;
+  } catch (e) { return {}; }
+})();
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -271,7 +347,7 @@ function remplirModele(modele, c) {
   const dest = destinataireTexte(c);
   const v = {
     expediteur_nom: courrier.nom || "", expediteur_adresse: courrier.adresse || "", expediteur_ville: courrier.ville || "",
-    expediteur_email: courrier.email || "", expediteur_tel: courrier.tel || "",
+    expediteur_email: courrier.email || "", expediteur_tel: courrier.tel || "", parcours: courrier.parcours || "",
     destinataire: dest ? "À l'attention de " + dest : "À l'attention du dirigeant",
     societe: c.nom, adresse: c.adresse || "", cp_ville: `${c.cp || ""} ${c.ville || ""}`.trim(),
     date: new Date().toLocaleDateString("fr-FR", {day: "numeric", month: "long", year: "numeric"}),
@@ -281,7 +357,9 @@ function remplirModele(modele, c) {
 }
 function ouvrirLettre(c) {
   if (!courrier.nom || !courrier.email) { setMsg("Renseigne d'abord ton nom et ton email dans « Courrier » (en haut de page).", true); $("courrier").open = true; return; }
-  const txt = remplirModele(courrier.modele || MODELE_DEFAUT, c);
+  const modele = courrier.modele || MODELE_DEFAUT;
+  if (modele.includes("{{parcours}}") && !courrier.parcours) { setMsg("Écris d'abord ta phrase de parcours dans « Courrier » (champ « Mon parcours »).", true); $("courrier").open = true; return; }
+  const txt = remplirModele(modele, c);
   const w = window.open("", "_blank");
   if (!w) { setMsg("Le navigateur a bloqué la fenêtre : autorise les fenêtres pour ce site.", true); return; }
   w.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Lettre – ${esc(c.nom)}</title>
@@ -291,11 +369,12 @@ function ouvrirLettre(c) {
 }
 function remplirFormCourrier() {
   $("cNom").value = courrier.nom || ""; $("cAdresse").value = courrier.adresse || ""; $("cVille").value = courrier.ville || "";
-  $("cEmail").value = courrier.email || ""; $("cTel").value = courrier.tel || ""; $("cModele").value = courrier.modele || MODELE_DEFAUT;
+  $("cEmail").value = courrier.email || ""; $("cTel").value = courrier.tel || ""; $("cParcours").value = courrier.parcours || ""; $("cModele").value = courrier.modele || MODELE_DEFAUT;
 }
 $("btnCourrierSave").addEventListener("click", () => {
   courrier = {nom: $("cNom").value.trim(), adresse: $("cAdresse").value.trim(), ville: $("cVille").value.trim(),
-              email: $("cEmail").value.trim(), tel: $("cTel").value.trim(), modele: $("cModele").value};
+              email: $("cEmail").value.trim(), tel: $("cTel").value.trim(), parcours: $("cParcours").value.trim(),
+              modele: $("cModele").value === MODELE_DEFAUT ? undefined : $("cModele").value};
   try { localStorage.setItem(CR_KEY, JSON.stringify(courrier)); setMsg("Coordonnées et modèle enregistrés dans ce navigateur."); } catch (e) { setMsg("Stockage du navigateur indisponible.", true); }
 });
 $("btnCourrierReset").addEventListener("click", () => { $("cModele").value = MODELE_DEFAUT; });
