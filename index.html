@@ -52,6 +52,9 @@
   .sl { display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:6px 16px; margin:8px 0; }
   .sl label { display:grid; grid-template-columns:1fr auto; font-size:13px; gap:2px 8px; } .sl input { grid-column:1 / 3; }
   #mesure { font-size:14px; }
+  .cr { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:8px; margin:8px 0; }
+  .cr input, #cModele { width:100%; } #cModele { min-height:300px; font:13px/1.4 ui-monospace, Menlo, Consolas, monospace; }
+  .dest { width:100%; margin-top:4px; }
 </style>
 </head>
 <body>
@@ -80,6 +83,7 @@
       <option value="none">À examiner (sans décision)</option><option value="all">Toutes</option>
       <option value="interessante">Intéressantes</option><option value="a_creuser">À creuser</option>
       <option value="ecartee">Écartées</option><option value="courrier">Courrier envoyé</option>
+      <option value="relance">Relances à faire (courrier de plus de 21 jours)</option>
     </select></label>
   <label>Départements<input id="fDep" placeholder="ex : 78,92"></label>
   <label>APE commence par<input id="fApe" placeholder="ex : 47, 4791"></label>
@@ -116,6 +120,25 @@
   </div>
 </details>
 
+<details id="courrier" class="panel" hidden>
+  <summary><b>Courrier : mes coordonnées et le modèle de lettre</b></summary>
+  <p class="hint">Enregistrés uniquement dans ce navigateur (jamais dans le dépôt). Le bouton « Lettre » d'une cible ouvre la lettre
+  prête à imprimer ou à enregistrer en PDF. Variables : {{expediteur_nom}} {{expediteur_adresse}} {{expediteur_ville}}
+  {{expediteur_email}} {{expediteur_tel}} {{destinataire}} {{societe}} {{adresse}} {{cp_ville}} {{date}} {{depuis}}.</p>
+  <div class="cr">
+    <input id="cNom" placeholder="Ton prénom et nom">
+    <input id="cAdresse" placeholder="Ton adresse (rue, code postal, ville)">
+    <input id="cVille" placeholder="Ville pour la date (ex : Paris)">
+    <input id="cEmail" placeholder="Email dédié">
+    <input id="cTel" placeholder="Téléphone">
+  </div>
+  <textarea id="cModele"></textarea>
+  <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;">
+    <button id="btnCourrierSave" class="primary">Enregistrer</button>
+    <button id="btnCourrierReset">Rétablir le modèle par défaut</button>
+  </div>
+</details>
+
 <div id="msg">Renseigne le dépôt et le jeton dans « Réglages ».</div>
 <main id="list"></main>
 <button id="more" hidden>Afficher la suite</button>
@@ -137,6 +160,34 @@ const PAGE = 30;
 
 let cfg = loadCfg(), cibles = [], decisions = {}, pending = {}, touched = new Set(), shown = PAGE, genere = "";
 let groupes = {}, poidsCfg = {}, poids = {};
+const CR_KEY = "prospection_courrier_v1";
+const MODELE_DEFAUT = `{{expediteur_nom}}
+{{expediteur_adresse}}
+{{expediteur_email}} · {{expediteur_tel}}
+
+{{destinataire}}
+{{societe}}
+{{adresse}}
+{{cp_ville}}
+
+{{expediteur_ville}}, le {{date}}
+
+Objet : Votre société – une démarche de reprise, en toute confidentialité
+
+Madame, Monsieur,
+
+Je recherche à reprendre une entreprise pour la développer dans la durée, en m'appuyant sur mon expérience du e-commerce. {{societe}}{{depuis}} a retenu mon attention.
+
+Si vous envisagez, à court ou moyen terme, de passer la main, je serais heureux d'échanger avec vous, sans engagement et dans la plus stricte confidentialité. Dans le cas contraire, ce courrier n'appelle aucune réponse.
+
+Je reste à votre disposition au {{expediteur_tel}} ou à {{expediteur_email}}.
+
+Je vous prie d'agréer, Madame, Monsieur, l'expression de mes salutations distinguées.
+
+{{expediteur_nom}}
+
+Vos coordonnées proviennent du registre public des sociétés. Pour ne plus être contacté : {{expediteur_email}}.`;
+let courrier = (() => { try { return JSON.parse(localStorage.getItem(CR_KEY)) || {}; } catch (e) { return {}; } })();
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -181,7 +232,7 @@ async function loadAll() {
     buildSliders();
     const d = await ghGet("data/decisions.json");
     decisions = d && d.text ? JSON.parse(d.text) : {};
-    $("filters").hidden = false; $("setup").hidden = true;
+    $("filters").hidden = false; $("setup").hidden = true; $("courrier").hidden = false; remplirFormCourrier();
     shown = PAGE; render(); setMsg("");
   } catch (e) { setMsg(e.message, true); $("setup").hidden = false; }
 }
@@ -207,6 +258,47 @@ async function saveAll() {
     throw new Error("Conflit persistant : recharge la page et recommence.");
   } catch (e) { setMsg(e.message, true); $("btnSave").disabled = false; }
 }
+
+/* ---------------------------------------------------------------- courrier */
+function jours(iso) { if (!iso) return null; const d = new Date(iso); return isNaN(d) ? null : Math.floor((Date.now() - d.getTime()) / 864e5); }
+function fmtDate(iso) { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleDateString("fr-FR"); }
+function destinataireTexte(c) {
+  const e = etat(c);
+  if (e && e.destinataire !== undefined && e.destinataire !== "") return e.destinataire;
+  return c.destinataire ? c.destinataire + (c.destinataire_qualite ? ", " + c.destinataire_qualite : "") : "";
+}
+function remplirModele(modele, c) {
+  const dest = destinataireTexte(c);
+  const v = {
+    expediteur_nom: courrier.nom || "", expediteur_adresse: courrier.adresse || "", expediteur_ville: courrier.ville || "",
+    expediteur_email: courrier.email || "", expediteur_tel: courrier.tel || "",
+    destinataire: dest ? "À l'attention de " + dest : "À l'attention du dirigeant",
+    societe: c.nom, adresse: c.adresse || "", cp_ville: `${c.cp || ""} ${c.ville || ""}`.trim(),
+    date: new Date().toLocaleDateString("fr-FR", {day: "numeric", month: "long", year: "numeric"}),
+    depuis: c.creation ? `, présente depuis ${c.creation},` : "",
+  };
+  return modele.replace(/\{\{(\w+)\}\}/g, (m, k) => (k in v ? v[k] : m));
+}
+function ouvrirLettre(c) {
+  if (!courrier.nom || !courrier.email) { setMsg("Renseigne d'abord ton nom et ton email dans « Courrier » (en haut de page).", true); $("courrier").open = true; return; }
+  const txt = remplirModele(courrier.modele || MODELE_DEFAUT, c);
+  const w = window.open("", "_blank");
+  if (!w) { setMsg("Le navigateur a bloqué la fenêtre : autorise les fenêtres pour ce site.", true); return; }
+  w.document.write(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>Lettre – ${esc(c.nom)}</title>
+<style>@page{size:A4;margin:22mm} body{font:12pt/1.5 Georgia,'Times New Roman',serif;white-space:pre-wrap;max-width:170mm;margin:0 auto;padding:10mm 0}</style></head><body>${esc(txt)}</body></html>`);
+  w.document.close();
+  setMsg("Lettre ouverte dans un nouvel onglet : imprime-la ou enregistre-la en PDF (Ctrl+P). Pense ensuite à cliquer sur « Courrier envoyé ».");
+}
+function remplirFormCourrier() {
+  $("cNom").value = courrier.nom || ""; $("cAdresse").value = courrier.adresse || ""; $("cVille").value = courrier.ville || "";
+  $("cEmail").value = courrier.email || ""; $("cTel").value = courrier.tel || ""; $("cModele").value = courrier.modele || MODELE_DEFAUT;
+}
+$("btnCourrierSave").addEventListener("click", () => {
+  courrier = {nom: $("cNom").value.trim(), adresse: $("cAdresse").value.trim(), ville: $("cVille").value.trim(),
+              email: $("cEmail").value.trim(), tel: $("cTel").value.trim(), modele: $("cModele").value};
+  try { localStorage.setItem(CR_KEY, JSON.stringify(courrier)); setMsg("Coordonnées et modèle enregistrés dans ce navigateur."); } catch (e) { setMsg("Stockage du navigateur indisponible.", true); }
+});
+$("btnCourrierReset").addEventListener("click", () => { $("cModele").value = MODELE_DEFAUT; });
 
 /* ---------------------------------------------------------------- score pondéré et mesure */
 function spond(c, w) {
@@ -282,7 +374,8 @@ function filtered() {
   let out = cibles.filter((c) => {
     const e = etat(c), s = e ? e.statut : null;
     if (st === "none" && s && !touched.has(c.siren)) return false;  // une carte qu'on vient de traiter reste visible
-    if (st !== "none" && st !== "all" && s !== st) return false;
+    if (st === "relance") { if (s !== "courrier" || (jours(e.courrier_le) ?? 0) < 21) return false; }
+    else if (st !== "none" && st !== "all" && s !== st) return false;
     if (calib && !c.calib) return false;
     if (noFil && c.filiale) return false;
     if (noPhys && c.physique) return false;
@@ -340,11 +433,14 @@ function card(c) {
       <div><b>Dirigeants</b> ${esc(c.dirigeants) || "—"}</div>
       ${c.holding_dirigeants ? `<div><b>Dirigeants de la holding</b> ${esc(c.holding_dirigeants)}</div>` : ""}
       <div><b>Signaux</b> ${esc(c.signaux) || "—"}</div>
+      <div><b>Courrier à</b>${c.destinataire_source === "holding" ? ' <span class="sub">(dirigeant de la holding' + (c.holding_type && c.holding_type.startsWith("groupe") ? " d'un groupe : à vérifier" : "") + ")</span>" : ""}
+        <input class="dest" data-act="dest" data-siren="${esc(c.siren)}" placeholder="Prénom Nom, fonction" value="${esc(destinataireTexte(c))}"></div>
     </div>
     <div class="links">${links}</div>
     ${c.site_autres ? `<details class="sc"><summary>Sites examinés par le robot</summary>${esc(c.site_autres)}</details>` : ""}
     ${score}
-    <div class="actions">${btns}${motif}${dirty ? '<span class="dirty">non enregistré</span>' : ""}</div>
+    ${e && e.courrier_le ? `<div class="sub">Courrier envoyé le ${fmtDate(e.courrier_le)} (il y a ${jours(e.courrier_le)} j)${jours(e.courrier_le) >= 21 && s === "courrier" ? " – <b>relance à faire</b>" : ""}</div>` : ""}
+    <div class="actions">${btns}${motif}<button data-act="lettre" data-siren="${esc(c.siren)}">Lettre</button>${dirty ? '<span class="dirty">non enregistré</span>' : ""}</div>
     <textarea class="note" data-act="note" data-siren="${esc(c.siren)}" placeholder="Note…">${esc(e ? e.note || "" : "")}</textarea>
   </article>`;
 }
@@ -363,9 +459,12 @@ function render() {
 function setDecision(siren, patch) {
   touched.add(siren);
   const base = pending[siren] || Object.assign({}, decisions[siren] || {});
+  if (patch.statut === "courrier" && !base.courrier_le) patch = Object.assign({courrier_le: new Date().toISOString().slice(0, 10)}, patch);
   pending[siren] = Object.assign(base, patch);
 }
 $("list").addEventListener("click", (ev) => {
+  const l = ev.target.closest("button[data-act='lettre']");
+  if (l) { ouvrirLettre(cibles.find((c) => c.siren === l.dataset.siren)); return; }
   const b = ev.target.closest("button[data-act='set']"); if (!b) return;
   const siren = b.dataset.siren, cur = etat(cibles.find((c) => c.siren === siren));
   const statut = cur && cur.statut === b.dataset.statut ? "" : b.dataset.statut;  // second clic : annule
@@ -379,6 +478,7 @@ $("list").addEventListener("change", (ev) => {
 $("list").addEventListener("input", (ev) => {
   const el = ev.target;
   if (el.dataset.act === "note") { setDecision(el.dataset.siren, {note: el.value}); updSave(); }
+  if (el.dataset.act === "dest") { setDecision(el.dataset.siren, {destinataire: el.value}); updSave(); }
 });
 function updSave() { const n = Object.keys(pending).length; $("btnSave").textContent = `Enregistrer (${n})`; $("btnSave").disabled = n === 0; }
 $("btnSave").addEventListener("click", saveAll);
