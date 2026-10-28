@@ -368,6 +368,13 @@ function renderSuivi() {
     h += ligneSuivi("3. Sites web cherchés", S.sites_cherches, S.sites_univers,
       `${S.sites_vente} avec vente en ligne détectée ; ${aucun} sans site trouvé ; hors pharmacies et assimilées`);
   }
+  if (S.web_requetes_total) h += ligneSuivi("4. Sourcing par le web (recherches par thème)", S.web_requetes_faites, S.web_requetes_total,
+    `${S.web_domaines || 0} domaines analysés ; ${S.web_retenues || 0} nouvelles cibles retenues`);
+  if (S.serper_consomme != null) {
+    const ps = S.serper_par_source || {};
+    h += `<div class="sub" style="margin:6px 0">Crédits Serper consommés (estimation du dépôt, pas le compteur officiel) : <b>${S.serper_consomme.toLocaleString("fr-FR")}</b>${S.serper_achete ? " / " + S.serper_achete.toLocaleString("fr-FR") + " (" + pct(S.serper_consomme, S.serper_achete) + " %)" : ""}
+      ${Object.keys(ps).length ? "— " + Object.entries(ps).map(([k, v]) => `${esc(k)} : ${v.toLocaleString("fr-FR")}`).join(" · ") : ""}</div>`;
+  }
   // ton analyse : calculée dans la page, à partir de tes décisions (y compris celles pas encore enregistrées)
   const U = cibles.filter((c) => !c.physique), n = {interessante: 0, a_creuser: 0, ecartee: 0, courrier: 0};
   let faites = 0, prio = 0, prioOui = 0, relances = 0, calibFaites = 0, calibTotal = 0;
@@ -377,7 +384,7 @@ function renderSuivi() {
     else if (["oui", "probable"].includes(siteClasse(c))) { prio++; if (siteClasse(c) === "oui") prioOui++; }
     if (c.calib) { calibTotal++; if (st) calibFaites++; }
   }
-  h += ligneSuivi("4. Ton analyse", faites, U.length,
+  h += ligneSuivi("5. Ton analyse", faites, U.length,
     `${n.interessante} intéressantes · ${n.a_creuser} à creuser · ${n.ecartee} écartées · ${n.courrier} courriers envoyés`);
   h += `<div class="sub">À examiner en priorité (vente en ligne détectée ou probable, sans décision) : <b>${prio}</b>
     (${prioOui} avec plateforme détectée, ${prio - prioOui} avec panier probable) ${prio ? '<button id="btnPrio" type="button">Les afficher</button>' : ""} · échantillon de calibration étiqueté : ${calibFaites} / ${calibTotal} · relances à faire : <b class="${relances ? "alerte" : ""}">${relances}</b></div>`;
@@ -514,7 +521,7 @@ function filtered() {
     if (calib && !c.calib) return false;
     if (noFil && c.filiale) return false;
     if (noPhys && c.physique) return false;
-    if (t && !(`${c.nom} ${c.siren} ${c.ville} ${c.ape} ${c.cp}`).toLowerCase().includes(t)) return false;
+    if (t && !(`${c.nom} ${c.siren} ${c.ville} ${c.ape} ${c.cp} ${c.source || ""}`).toLowerCase().includes(t)) return false;
     if (apes.length && !apes.some((a) => (c.ape || "").startsWith(a))) return false;
     if (deps.length && !deps.some((d) => (c.cp || "").startsWith(d))) return false;
     if (!isNaN(caMin) && !(c.ca != null && c.ca >= caMin * 1000)) return false;
@@ -537,6 +544,7 @@ function card(c) {
   const eff = EFFECTIFS[c.effectif] || c.effectif || "effectif inconnu";
   const chips = [];
   if (c.filiale) chips.push(chip("nom de filiale probable", "warn"));
+  if ((c.source || "").startsWith("web:")) chips.push(chip("sourcée par le web : " + c.source.slice(4), ""));
   if (c.holding) chips.push(chip("holding : " + c.holding, ""));
   const sc = siteClasse(c);
   if (sc === "oui") chips.push(chip("vente en ligne détectée" + (c.plateforme ? " (" + c.plateforme + ")" : ""), "good"));
