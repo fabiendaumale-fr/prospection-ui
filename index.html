@@ -99,8 +99,9 @@
   <label>CA max (k€)<input id="fCaMax" type="number" min="0"></label>
   <label>Âge min<input id="fAge" type="number" min="0"></label>
   <label>Site
-    <select id="fSite"><option value="">Tous</option><option value="oui">Vente en ligne détectée</option>
-      <option value="probable">Vente en ligne probable</option><option value="non">Site sans vente détectée</option>
+    <select id="fSite"><option value="">Tous</option><option value="vente">Vente en ligne (plateforme détectée ou panier probable)</option>
+      <option value="oui">Plateforme e-commerce détectée (Shopify, PrestaShop…)</option>
+      <option value="probable">Panier probable (plateforme non identifiée)</option><option value="non">Site sans vente détectée</option>
       <option value="inaccessible">Site illisible par le robot</option>
       <option value="aucun">Aucun site trouvé</option>
       <option value="non_cherche">Pas encore recherché</option></select></label>
@@ -369,18 +370,26 @@ function renderSuivi() {
   }
   // ton analyse : calculée dans la page, à partir de tes décisions (y compris celles pas encore enregistrées)
   const U = cibles.filter((c) => !c.physique), n = {interessante: 0, a_creuser: 0, ecartee: 0, courrier: 0};
-  let faites = 0, prio = 0, relances = 0, calibFaites = 0, calibTotal = 0;
+  let faites = 0, prio = 0, prioOui = 0, relances = 0, calibFaites = 0, calibTotal = 0;
   for (const c of U) {
     const e = etat(c), st = e && e.statut;
     if (st) { faites++; if (st in n) n[st]++; if (st === "courrier" && (jours(e.courrier_le) ?? 0) >= 21) relances++; }
-    else if (["oui", "probable"].includes(siteClasse(c))) prio++;
+    else if (["oui", "probable"].includes(siteClasse(c))) { prio++; if (siteClasse(c) === "oui") prioOui++; }
     if (c.calib) { calibTotal++; if (st) calibFaites++; }
   }
   h += ligneSuivi("4. Ton analyse", faites, U.length,
     `${n.interessante} intéressantes · ${n.a_creuser} à creuser · ${n.ecartee} écartées · ${n.courrier} courriers envoyés`);
-  h += `<div class="sub">À examiner en priorité (vente en ligne détectée, sans décision) : <b>${prio}</b> · échantillon de calibration étiqueté : ${calibFaites} / ${calibTotal} · relances à faire : <b class="${relances ? "alerte" : ""}">${relances}</b></div>`;
+  h += `<div class="sub">À examiner en priorité (vente en ligne détectée ou probable, sans décision) : <b>${prio}</b>
+    (${prioOui} avec plateforme détectée, ${prio - prioOui} avec panier probable) ${prio ? '<button id="btnPrio" type="button">Les afficher</button>' : ""} · échantillon de calibration étiqueté : ${calibFaites} / ${calibTotal} · relances à faire : <b class="${relances ? "alerte" : ""}">${relances}</b></div>`;
   $("suiviCorps").innerHTML = h;
 }
+
+$("suiviCorps").addEventListener("click", (ev) => {
+  if (!ev.target.closest("#btnPrio")) return;
+  for (const id of ["fText", "fDep", "fApe", "fCaMin", "fCaMax", "fAge"]) $(id).value = "";
+  $("fStatut").value = "none"; $("fSite").value = "vente"; $("fCalib").checked = false; $("fPhysique").checked = true; $("fFiliale").checked = false;
+  shown = PAGE; touched.clear(); render(); if ($("list").scrollIntoView) $("list").scrollIntoView({behavior: "smooth", block: "start"});
+});
 
 /* ---------------------------------------------------------------- courrier */
 function jours(iso) { if (!iso) return null; const d = new Date(iso); return isNaN(d) ? null : Math.floor((Date.now() - d.getTime()) / 864e5); }
@@ -511,7 +520,7 @@ function filtered() {
     if (!isNaN(caMin) && !(c.ca != null && c.ca >= caMin * 1000)) return false;
     if (!isNaN(caMax) && !(c.ca != null && c.ca <= caMax * 1000)) return false;
     if (!isNaN(ageMin) && !(c.age != null && c.age >= ageMin)) return false;
-    if (site && siteClasse(c) !== site) return false;
+    if (site === "vente" ? !["oui", "probable"].includes(siteClasse(c)) : (site && siteClasse(c) !== site)) return false;
     return true;
   });
   const k = $("fSort").value;
