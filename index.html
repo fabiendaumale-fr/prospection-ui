@@ -12,6 +12,7 @@
     :root { --bg:#12151b; --card:#1b2029; --txt:#e8ebf1; --mut:#97a0b2; --bd:#2b3240; --acc:#6aa0ff;
             --ok:#4cc38a; --warn:#f0a73a; --ko:#ff7b72; --chip:#262d3a; } }
   * { box-sizing:border-box; }
+  [hidden] { display:none !important; }
   body { margin:0; font:15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background:var(--bg); color:var(--txt); }
   header { position:sticky; top:0; z-index:5; background:var(--card); border-bottom:1px solid var(--bd);
            padding:10px 14px; display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
@@ -52,6 +53,8 @@
   .sl { display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:6px 16px; margin:8px 0; }
   .sl label { display:grid; grid-template-columns:1fr auto; font-size:13px; gap:2px 8px; } .sl input { grid-column:1 / 3; }
   #mesure { font-size:14px; }
+  .barre { height:8px; background:var(--chip); border-radius:6px; overflow:hidden; margin-top:3px; } .barre > i { display:block; height:100%; background:var(--acc); }
+  #suiviCorps b.alerte { color:var(--warn); }
   .cr { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:8px; margin:8px 0; }
   .cr input, #cModele { width:100%; } #cModele { min-height:300px; font:13px/1.4 ui-monospace, Menlo, Consolas, monospace; }
   .dest { width:100%; margin-top:4px; }
@@ -75,6 +78,11 @@
     <button id="btnCfgClear">Effacer le jeton de ce navigateur</button>
   </div>
 </section>
+
+<details id="suivi" class="panel" open hidden>
+  <summary><b>Où on en est</b> <span id="suiviDate" class="sub"></span></summary>
+  <div id="suiviCorps"></div>
+</details>
 
 <section id="filters" class="panel" hidden>
   <label>Recherche<input id="fText" placeholder="nom, SIREN, ville, APE"></label>
@@ -142,6 +150,7 @@
 </details>
 
 <div id="msg">Renseigne le dépôt et le jeton dans « Réglages ».</div>
+<div id="vide" class="sub" style="margin:0 14px"></div>
 <main id="list"></main>
 <button id="more" hidden>Afficher la suite</button>
 
@@ -161,7 +170,7 @@ const EFFECTIFS = {"00":"0 salarié","01":"1-2 salariés","02":"3-5 salariés","
 const PAGE = 30;
 
 let cfg = loadCfg(), cibles = [], decisions = {}, pending = {}, touched = new Set(), shown = PAGE, genere = "";
-let groupes = {}, poidsCfg = {}, poids = {};
+let groupes = {}, poidsCfg = {}, poids = {}, suiviData = {};
 const CR_KEY = "prospection_courrier_v1";
 const MODELE_V1 = `{{expediteur_nom}}
 {{expediteur_adresse}}
@@ -304,7 +313,7 @@ async function loadAll() {
     if (!a) { setMsg("Fichier data/a_examiner.json introuvable : lance d'abord le workflow.", true); return; }
     const data = JSON.parse(a.text);
     cibles = data.cibles || []; genere = data.genere_le || "";
-    groupes = data.groupes || {}; poidsCfg = Object.assign({}, data.poids || {}); poids = Object.assign({}, poidsCfg);
+    suiviData = data.suivi || {}; groupes = data.groupes || {}; poidsCfg = Object.assign({}, data.poids || {}); poids = Object.assign({}, poidsCfg);
     buildSliders();
     const d = await ghGet("data/decisions.json");
     decisions = d && d.text ? JSON.parse(d.text) : {};
@@ -333,6 +342,44 @@ async function saveAll() {
     }
     throw new Error("Conflit persistant : recharge la page et recommence.");
   } catch (e) { setMsg(e.message, true); $("btnSave").disabled = false; }
+}
+
+/* ---------------------------------------------------------------- suivi : où on en est */
+function pct(n, t) { return t ? Math.round(100 * n / t) : 0; }
+function ligneSuivi(titre, n, t, detail) {
+  return `<div style="margin:9px 0"><div><b>${esc(titre)}</b> : ${n} / ${t} (${pct(n, t)} %)${detail ? ` <span class="sub">— ${detail}</span>` : ""}</div>
+  <div class="barre"><i style="width:${pct(n, t)}%"></i></div></div>`;
+}
+function renderSuivi() {
+  if (!cibles.length) { $("suivi").hidden = true; return; }
+  $("suivi").hidden = false;
+  $("suiviDate").textContent = genere ? "· données du " + genere : "";
+  const S = suiviData || {};
+  let h = "";
+  if (S.importees) {
+    const enr = S.importees - (S.attente_enrichissement || 0);
+    h += ligneSuivi("1. Enrichissement (dirigeants, comptes)", enr, S.importees,
+      (S.attente_enrichissement ? `<b class="alerte">${S.attente_enrichissement} en attente</b>` : "terminé") + (S.non_trouvees ? ` ; ${S.non_trouvees} introuvables dans l'API` : ""));
+  }
+  if (S.holdings_total) h += ligneSuivi("2. Holdings résolues", S.holdings_resolues, S.holdings_total, "cibles dirigées par une société");
+  if (S.sites_univers) {
+    const conf = S.sites_par_confiance || {}, aucun = conf.aucun || 0;
+    h += ligneSuivi("3. Sites web cherchés", S.sites_cherches, S.sites_univers,
+      `${S.sites_vente} avec vente en ligne détectée ; ${aucun} sans site trouvé ; hors pharmacies et assimilées`);
+  }
+  // ton analyse : calculée dans la page, à partir de tes décisions (y compris celles pas encore enregistrées)
+  const U = cibles.filter((c) => !c.physique), n = {interessante: 0, a_creuser: 0, ecartee: 0, courrier: 0};
+  let faites = 0, prio = 0, relances = 0, calibFaites = 0, calibTotal = 0;
+  for (const c of U) {
+    const e = etat(c), st = e && e.statut;
+    if (st) { faites++; if (st in n) n[st]++; if (st === "courrier" && (jours(e.courrier_le) ?? 0) >= 21) relances++; }
+    else if (["oui", "probable"].includes(siteClasse(c))) prio++;
+    if (c.calib) { calibTotal++; if (st) calibFaites++; }
+  }
+  h += ligneSuivi("4. Ton analyse", faites, U.length,
+    `${n.interessante} intéressantes · ${n.a_creuser} à creuser · ${n.ecartee} écartées · ${n.courrier} courriers envoyés`);
+  h += `<div class="sub">À examiner en priorité (vente en ligne détectée, sans décision) : <b>${prio}</b> · échantillon de calibration étiqueté : ${calibFaites} / ${calibTotal} · relances à faire : <b class="${relances ? "alerte" : ""}">${relances}</b></div>`;
+  $("suiviCorps").innerHTML = h;
 }
 
 /* ---------------------------------------------------------------- courrier */
@@ -530,8 +577,8 @@ function render() {
   $("more").hidden = list.length <= shown;
   const n = Object.keys(pending).length;
   $("btnSave").textContent = `Enregistrer (${n})`; $("btnSave").disabled = n === 0;
-  renderMesure();
-  if (!list.length) setMsg("Aucune cible ne correspond à ces filtres.");
+  renderMesure(); renderSuivi();
+  $("vide").textContent = cibles.length && !list.length ? "Aucune cible ne correspond à ces filtres." : "";
 }
 
 /* ---------------------------------------------------------------- événements */
