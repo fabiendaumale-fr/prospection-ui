@@ -105,6 +105,9 @@
       <option value="inaccessible">Site illisible par le robot</option>
       <option value="aucun">Aucun site trouvé</option>
       <option value="non_cherche">Pas encore recherché</option></select></label>
+  <label>Origine
+    <select id="fOrigine"><option value="">Toutes</option><option value="cap">Exports Capfinancials</option>
+      <option value="api">API officielle (découverte)</option><option value="web">Sourcing web (tous thèmes)</option></select></label>
   <label>Tri
     <select id="fSort"><option value="hasard">Ordre aléatoire (à l'aveugle)</option><option value="score">Score pondéré décroissant</option>
       <option value="ca">CA décroissant</option><option value="age">Âge décroissant</option>
@@ -315,7 +318,7 @@ async function loadAll() {
     const data = JSON.parse(a.text);
     cibles = data.cibles || []; genere = data.genere_le || "";
     suiviData = data.suivi || {}; groupes = data.groupes || {}; poidsCfg = Object.assign({}, data.poids || {}); poids = Object.assign({}, poidsCfg);
-    buildSliders();
+    buildSliders(); buildOrigines();
     const d = await ghGet("data/decisions.json");
     decisions = d && d.text ? JSON.parse(d.text) : {};
     $("filters").hidden = false; $("setup").hidden = true; $("courrier").hidden = false; remplirFormCourrier();
@@ -370,6 +373,16 @@ function renderSuivi() {
   }
   if (S.web_requetes_total) h += ligneSuivi("4. Sourcing par le web (recherches par thème)", S.web_requetes_faites, S.web_requetes_total,
     `${S.web_domaines || 0} domaines analysés ; ${S.web_retenues || 0} nouvelles cibles retenues`);
+  // origine des cibles : calculé dans la page, donc exact même si le fichier de suivi manque
+  const comptes = {cap: 0, api: 0, web: 0}, themes = {}, restants = {cap: 0, api: 0, web: 0};
+  for (const c of cibles) {
+    const o = origine(c); comptes[o]++;
+    const e = etat(c); if (!(e && e.statut)) restants[o]++;
+    if (o === "web") { const t = themeWeb(c) || (c.source || "").slice(4) || "(sans thème)"; themes[t] = (themes[t] || 0) + 1; }
+  }
+  h += `<div class="sub" style="margin:8px 0"><b>Origine des cibles</b> : exports Capfinancials <b>${comptes.cap}</b> · API officielle <b>${comptes.api}</b> · sourcing web <b>${comptes.web}</b>
+    <span class="sub">(sans décision : ${restants.cap} · ${restants.api} · ${restants.web})</span>
+    ${comptes.web ? "<br>Sourcing web par thème : " + Object.entries(themes).sort((a, b) => b[1] - a[1]).map(([t, n]) => `${esc(t)} <b>${n}</b>`).join(" · ") : ""}</div>`;
   if (S.serper_consomme != null) {
     const ps = S.serper_par_source || {};
     h += `<div class="sub" style="margin:6px 0">Crédits Serper consommés (estimation du dépôt, pas le compteur officiel) : <b>${S.serper_consomme.toLocaleString("fr-FR")}</b>${S.serper_achete ? " / " + S.serper_achete.toLocaleString("fr-FR") + " (" + pct(S.serper_consomme, S.serper_achete) + " %)" : ""}
@@ -498,6 +511,25 @@ $("btnPoidsSave").addEventListener("click", async () => {
   } catch (e) { setMsg(e.message, true); }
 });
 
+/* ---------------------------------------------------------------- origine des cibles */
+function origine(c) {
+  const src = c.source || "";
+  if (src.startsWith("web:")) return "web";
+  if (src.startsWith("api:")) return "api";
+  return "cap";
+}
+function themeWeb(c) { const m = (c.source || "").match(/^web:(.+?) ›/); return m ? m[1] : ""; }
+function correspondOrigine(c, v) {
+  if (!v) return true;
+  if (v.startsWith("web:")) return (c.source || "").startsWith(v + " ›");
+  return origine(c) === v;
+}
+function buildOrigines() {
+  const sel = $("fOrigine"); sel.querySelectorAll("option[data-theme]").forEach((o) => o.remove());
+  const themes = [...new Set(cibles.map(themeWeb).filter(Boolean))].sort();
+  for (const t of themes) { const o = document.createElement("option"); o.value = "web:" + t; o.dataset.theme = "1"; o.textContent = "   Web › " + t; sel.appendChild(o); }
+}
+
 /* ---------------------------------------------------------------- filtres et tri */
 function hash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
 function etat(c) { return pending[c.siren] || decisions[c.siren] || null; }
@@ -520,6 +552,7 @@ function filtered() {
     else if (st !== "none" && st !== "all" && s !== st) return false;
     if (calib && !c.calib) return false;
     if (noFil && c.filiale) return false;
+    if (!correspondOrigine(c, $("fOrigine").value)) return false;
     if (noPhys && c.physique) return false;
     if (t && !(`${c.nom} ${c.siren} ${c.ville} ${c.ape} ${c.cp} ${c.source || ""}`).toLowerCase().includes(t)) return false;
     if (apes.length && !apes.some((a) => (c.ape || "").startsWith(a))) return false;
@@ -630,7 +663,7 @@ $("btnSettings").addEventListener("click", () => { $("setup").hidden = !$("setup
 $("btnCfgSave").addEventListener("click", () => { cfg = {repo: $("inRepo").value.trim(), token: $("inToken").value.trim()}; saveCfg(); loadAll(); });
 $("btnCfgClear").addEventListener("click", () => { cfg = {repo: cfg.repo}; saveCfg(); $("inToken").value = ""; setMsg("Jeton effacé de ce navigateur."); });
 $("more").addEventListener("click", () => { shown += PAGE; render(); });
-["fText", "fStatut", "fDep", "fApe", "fCaMin", "fCaMax", "fAge", "fSite", "fSort", "fCalib", "fScore", "fFiliale", "fPhysique"].forEach((id) =>
+["fText", "fStatut", "fDep", "fApe", "fCaMin", "fCaMax", "fAge", "fSite", "fSort", "fCalib", "fScore", "fFiliale", "fPhysique", "fOrigine"].forEach((id) =>
   $(id).addEventListener("input", () => { shown = PAGE; touched.clear(); render(); }));
 window.addEventListener("beforeunload", (e) => { if (Object.keys(pending).length) { e.preventDefault(); e.returnValue = ""; } });
 
