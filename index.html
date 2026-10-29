@@ -116,6 +116,8 @@
   <label class="inline"><input id="fScore" type="checkbox"> Afficher le score</label>
   <label class="inline"><input id="fFiliale" type="checkbox"> Masquer les noms de filiale probable</label>
   <label class="inline"><input id="fPhysique" type="checkbox" checked> Masquer pharmacies, supermarchés, boucheries…</label>
+  <label class="inline"><input id="fZone" type="checkbox" checked> Masquer les cibles hors de mes départements</label>
+  <label class="inline"><input id="fSansCa" type="checkbox" checked> Masquer les cibles sans CA (ni publié ni estimé)</label>
 </section>
 
 <details id="pond" class="panel" hidden>
@@ -150,6 +152,22 @@
   <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px;">
     <button id="btnCourrierSave" class="primary">Enregistrer</button>
     <button id="btnCourrierReset">Rétablir le modèle par défaut</button>
+  </div>
+</details>
+
+<details id="caverif" class="panel" hidden>
+  <summary><b>Vérifier les CA sur Capfinancials</b> <span id="caverifN" class="sub"></span></summary>
+  <p class="hint">Pour les cibles de ta zone qui n'ont aucun CA, le plus rapide est de demander à <b>Claude dans Chrome</b> (connecté à ton compte Capfinancials)
+  de relever la fiche de chaque société. 1) « Préparer le lot » copie la consigne avec les SIREN ; 2) colle-la dans Claude dans Chrome ; 3) colle ici le tableau qu'il renvoie.
+  Commence par un lot de 3 à 5 pour vérifier que la lecture est juste. Vérifie aussi que les conditions d'utilisation de Capfinancials autorisent ce type de consultation automatisée.</p>
+  <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+    Taille du lot <input id="caLot" type="number" min="1" max="60" value="5" style="width:70px">
+    <button id="btnCaLot" class="primary">Préparer le lot (copier la consigne)</button>
+  </div>
+  <textarea id="caConsigne" rows="7" style="width:100%; margin-top:8px;" readonly placeholder="La consigne apparaît ici."></textarea>
+  <textarea id="caResultats" rows="6" style="width:100%; margin-top:8px;" placeholder="Colle ici le tableau CSV renvoyé : siren;nom_lu;ca_min;ca_max;effectif;notation;statut"></textarea>
+  <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:8px;">
+    <button id="btnCaEnreg" class="primary">Enregistrer ces CA</button> <span id="caBilan" class="sub"></span>
   </div>
 </details>
 
@@ -321,7 +339,9 @@ async function loadAll() {
     buildSliders(); buildOrigines();
     const d = await ghGet("data/decisions.json");
     decisions = d && d.text ? JSON.parse(d.text) : {};
-    $("filters").hidden = false; $("setup").hidden = true; $("courrier").hidden = false; remplirFormCourrier();
+    const cv = await ghGet("data/ca_verifies.json");
+    caVerifies = cv && cv.text ? JSON.parse(cv.text) : {}; appliquerCa();
+    $("filters").hidden = false; $("setup").hidden = true; $("courrier").hidden = false; $("caverif").hidden = false; remplirFormCourrier();
     shown = PAGE; render(); setMsg("");
   } catch (e) { setMsg(e.message, true); $("setup").hidden = false; }
 }
@@ -389,7 +409,9 @@ function renderSuivi() {
       ${Object.keys(ps).length ? "— " + Object.entries(ps).map(([k, v]) => `${esc(k)} : ${v.toLocaleString("fr-FR")}`).join(" · ") : ""}</div>`;
   }
   // ton analyse : calculée dans la page, à partir de tes décisions (y compris celles pas encore enregistrées)
-  const U = cibles.filter((c) => !c.physique), n = {interessante: 0, a_creuser: 0, ecartee: 0, courrier: 0};
+  const U0 = cibles.filter((c) => !c.physique), U = U0.filter((c) => zoneOk(c) && c.ca != null), n = {interessante: 0, a_creuser: 0, ecartee: 0, courrier: 0};
+  const horsZone = U0.filter((c) => !zoneOk(c)).length, sansCa = U0.filter((c) => zoneOk(c) && c.ca == null).length;
+  h += `<div class="sub" style="margin:8px 0">Masquées par défaut : <b>${horsZone}</b> hors de tes départements · <b>${sansCa}</b> en zone sans CA (publié ou estimé) → à vérifier dans « Vérifier les CA sur Capfinancials »</div>`;
   let faites = 0, prio = 0, prioOui = 0, relances = 0, calibFaites = 0, calibTotal = 0;
   for (const c of U) {
     const e = etat(c), st = e && e.statut;
@@ -407,7 +429,7 @@ function renderSuivi() {
 $("suiviCorps").addEventListener("click", (ev) => {
   if (!ev.target.closest("#btnPrio")) return;
   for (const id of ["fText", "fDep", "fApe", "fCaMin", "fCaMax", "fAge"]) $(id).value = "";
-  $("fStatut").value = "none"; $("fSite").value = "vente"; $("fCalib").checked = false; $("fPhysique").checked = true; $("fFiliale").checked = false;
+  $("fStatut").value = "none"; $("fSite").value = "vente"; $("fCalib").checked = false; $("fPhysique").checked = true; $("fFiliale").checked = false; $("fZone").checked = true; $("fSansCa").checked = true; $("fOrigine").value = "";
   shown = PAGE; touched.clear(); render(); if ($("list").scrollIntoView) $("list").scrollIntoView({behavior: "smooth", block: "start"});
 });
 
@@ -511,6 +533,105 @@ $("btnPoidsSave").addEventListener("click", async () => {
   } catch (e) { setMsg(e.message, true); }
 });
 
+/* ---------------------------------------------------------------- zone et CA vérifiés sur Capfinancials */
+const ZONES_OK = ["idf", "zone_elargie"];
+function zoneOk(c) { return !c.zone || ZONES_OK.includes(c.zone); }
+let caVerifies = {};
+function appliquerCa() {
+  for (const c of cibles) {
+    const v = caVerifies[c.siren];
+    if (v && (c.ca == null || c.ca_est)) { const m = v.ca_max ?? v.ca_min; if (m != null) { c.ca = m; c.ca_est = true; } c.ca_v = v; }
+  }
+}
+function caTexte(c) {
+  if (c.ca_v && (c.ca_v.ca_min != null || c.ca_v.ca_max != null)) {
+    const a = c.ca_v.ca_min, b = c.ca_v.ca_max;
+    return `${a != null && b != null && a !== b ? fmtEur(a) + " – " + fmtEur(b) : fmtEur(b ?? a)} (estimation Capfinancials${c.ca_v.date ? " du " + fmtDate(c.ca_v.date) : ""})`
+      + (c.ca_v.alerte ? " ⚠ nom lu différent" : "");
+  }
+  return fmtEur(c.ca) + (c.ca_est ? " (estimé)" : "");
+}
+function normNom(t) {
+  return String(t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9 ]/g, " ")
+    .split(/\s+/).filter((m) => m.length >= 3 && !["sarl", "sas", "sasu", "eurl", "sa", "societe", "ste", "france"].includes(m));
+}
+function nomCorrespond(nomCible, nomLu) { const a = normNom(nomCible), b = new Set(normNom(nomLu)); return !b.size || a.some((m) => b.has(m)); }
+function aVerifier() {
+  const vente = (c) => ["oui", "probable"].includes(siteClasse(c)) ? 0 : 1;
+  return cibles.filter((c) => !c.physique && zoneOk(c) && c.ca == null && !(etat(c) && etat(c).statut) && !caVerifies[c.siren])
+    .sort((a, b) => vente(a) - vente(b) || a.nom.localeCompare(b.nom));
+}
+function consigneCa(liste) {
+  return `Je suis connecté à Capfinancials dans ce navigateur. Pour CHACUN des SIREN ci-dessous, ouvre la fiche https://app.capfinancials.com/company/<SIREN> (une page à la fois, en attendant 5 à 10 secondes entre deux pages, comme le ferait une personne) et relève, sur l'onglet « Informations d'identité » :
+- le nom de la société affiché (raison sociale) ;
+- le chiffre d'affaires de la carte « Chiffre d'affaires… » : si c'est une fourchette (ex. « 50 000 € à 76 000 € »), le minimum et le maximum en euros, sans espace ni symbole ; si c'est un seul chiffre, le même nombre dans les deux colonnes ; vide si rien n'est affiché ;
+- la tranche d'effectifs, la notation ExtraNote, le statut (actif ou non).
+Règles : ne clique sur aucun bouton d'export, d'achat ou de personnalisation, ne modifie rien. Si une page est introuvable, si un captcha ou un message de limite apparaît, ARRÊTE-TOI et dis-le-moi, sans insister.
+Réponds uniquement par un tableau CSV à séparateur point-virgule, avec cet en-tête exact puis une ligne par SIREN :
+siren;nom_lu;ca_min;ca_max;effectif;notation;statut
+
+SIREN à vérifier (${liste.length}) :
+${liste.map((c) => c.siren + " (" + c.nom + ")").join("\n")}`;
+}
+function parserCa(texte) {
+  const lignes = String(texte || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean), out = [];
+  let colonnes = ["siren", "nom_lu", "ca_min", "ca_max", "effectif", "notation", "statut"];
+  const nombre = (x) => {
+    const t = String(x || "").trim().toLowerCase().replace(/\s/g, "");
+    if (!t) return null;
+    const m = t.match(/^([\d.,]+)(m|k)/); if (m) return Math.round(parseFloat(m[1].replace(",", ".")) * (m[2] === "m" ? 1e6 : 1e3));
+    const n = parseInt(t.replace(/[^\d]/g, ""), 10); return isNaN(n) ? null : n;
+  };
+  for (const l of lignes) {
+    const sep = l.includes(";") ? ";" : l.includes("\t") ? "\t" : ",";
+    const cases = l.split(sep).map((x) => x.trim().replace(/^"|"$/g, ""));
+    if (/^siren$/i.test(cases[0])) { colonnes = cases.map((x) => x.toLowerCase()); continue; }
+    const r = {}; colonnes.forEach((k, i) => r[k] = cases[i] ?? "");
+    const siren = String(r.siren || "").replace(/\D/g, "");
+    if (siren.length === 9) out.push({siren, nom_lu: r.nom_lu || "", ca_min: nombre(r.ca_min), ca_max: nombre(r.ca_max), effectif: r.effectif || "", notation: r.notation || "", statut: r.statut || ""});
+  }
+  return out;
+}
+function renderCaVerif() {
+  const n = aVerifier().length;
+  $("caverifN").textContent = `· ${n} cible(s) en zone sans CA, à vérifier`;
+}
+$("btnCaLot").addEventListener("click", () => {
+  const lot = Math.max(1, Math.min(60, parseInt($("caLot").value, 10) || 20)), liste = aVerifier().slice(0, lot);
+  if (!liste.length) { $("caConsigne").value = "Aucune cible à vérifier : toutes celles de ta zone ont un CA publié, estimé ou une décision."; return; }
+  const t = consigneCa(liste); $("caConsigne").value = t;
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(() => setMsg(`Consigne copiée (${liste.length} SIREN) : colle-la dans Claude dans Chrome, puis reviens coller son tableau ci-dessous.`), () => {});
+});
+$("btnCaEnreg").addEventListener("click", async () => {
+  const lues = parserCa($("caResultats").value);
+  if (!lues.length) { $("caBilan").textContent = "Aucune ligne exploitable (9 chiffres de SIREN attendus au début de chaque ligne)."; return; }
+  const connus = new Map(cibles.map((c) => [c.siren, c])), maj = new Date().toISOString().slice(0, 10), nouvelles = {};
+  let inconnues = 0, sansCa = 0, douteux = [];
+  for (const r of lues) {
+    const c = connus.get(r.siren); if (!c) { inconnues++; continue; }
+    const alerte = !nomCorrespond(c.nom, r.nom_lu);
+    if (r.ca_min == null && r.ca_max == null) sansCa++;
+    if (alerte) douteux.push(r.siren);
+    nouvelles[r.siren] = {ca_min: r.ca_min, ca_max: r.ca_max ?? r.ca_min, effectif: r.effectif, notation: r.notation, statut: r.statut, nom_lu: r.nom_lu, alerte, date: maj};
+  }
+  try {
+    $("btnCaEnreg").disabled = true; setMsg("Enregistrement des CA…");
+    for (let essai = 0; essai < 3; essai++) {
+      const cur = await ghGet("data/ca_verifies.json");
+      const remote = cur && cur.text ? JSON.parse(cur.text) : {}, merged = Object.assign({}, remote, nouvelles);
+      const res = await ghPut("data/ca_verifies.json", JSON.stringify(merged, null, 1), cur ? cur.sha : null, `CA vérifiés : ${Object.keys(nouvelles).length} cible(s)`);
+      if (res.status === 200 || res.status === 201) {
+        caVerifies = merged; appliquerCa(); render(); $("caResultats").value = "";
+        $("caBilan").innerHTML = `${Object.keys(nouvelles).length} CA enregistré(s)` + (sansCa ? ` · ${sansCa} sans CA affiché` : "") + (inconnues ? ` · ${inconnues} SIREN inconnu(s) ignoré(s)` : "")
+          + (douteux.length ? ` · <b class="alerte">${douteux.length} nom(s) lu(s) différent(s) du nôtre : à contrôler</b> (${douteux.join(", ")})` : "");
+        setMsg(""); $("btnCaEnreg").disabled = false; return;
+      }
+      if (res.status !== 409 && res.status !== 422) throw new Error("Échec de l'enregistrement des CA (" + res.status + ").");
+    }
+    throw new Error("Conflit persistant sur les CA.");
+  } catch (e) { setMsg(e.message, true); $("btnCaEnreg").disabled = false; }
+});
+
 /* ---------------------------------------------------------------- origine des cibles */
 function origine(c) {
   const src = c.source || "";
@@ -552,6 +673,8 @@ function filtered() {
     else if (st !== "none" && st !== "all" && s !== st) return false;
     if (calib && !c.calib) return false;
     if (noFil && c.filiale) return false;
+    if ($("fZone").checked && !zoneOk(c)) return false;
+    if ($("fSansCa").checked && c.ca == null) return false;
     if (!correspondOrigine(c, $("fOrigine").value)) return false;
     if (noPhys && c.physique) return false;
     if (t && !(`${c.nom} ${c.siren} ${c.ville} ${c.ape} ${c.cp} ${c.source || ""}`).toLowerCase().includes(t)) return false;
@@ -604,7 +727,7 @@ function card(c) {
     <div class="sub">${esc(c.cp)} ${esc(c.ville)} · ${esc(c.forme || "forme ?")} · créée ${c.creation || "?"} · ${esc(eff)}</div>
     <div class="chips">${chips.join("")}</div>
     <div class="facts">
-      <div><b>CA</b> ${fmtEur(c.ca)}${c.ca_est ? " (estimé)" : ""}${c.annee_comptes ? " · comptes " + c.annee_comptes : ""}</div>
+      <div><b>CA</b> ${caTexte(c)}${c.annee_comptes && !c.ca_v ? " · comptes " + c.annee_comptes : ""}</div>
       <div><b>Résultat net</b> ${c.resultat == null ? "?" : fmtEur(c.resultat)}${c.marge != null ? " (" + c.marge + " %)" : ""} <span class="sub">– peu parlant pour une TPE</span></div>
       <div><b>Dirigeants</b> ${esc(c.dirigeants) || "—"}</div>
       ${c.holding_dirigeants ? `<div><b>Dirigeants de la holding</b> ${esc(c.holding_dirigeants)}</div>` : ""}
@@ -627,7 +750,7 @@ function render() {
   $("more").hidden = list.length <= shown;
   const n = Object.keys(pending).length;
   $("btnSave").textContent = `Enregistrer (${n})`; $("btnSave").disabled = n === 0;
-  renderMesure(); renderSuivi();
+  renderMesure(); renderSuivi(); renderCaVerif();
   $("vide").textContent = cibles.length && !list.length ? "Aucune cible ne correspond à ces filtres." : "";
 }
 
@@ -663,7 +786,7 @@ $("btnSettings").addEventListener("click", () => { $("setup").hidden = !$("setup
 $("btnCfgSave").addEventListener("click", () => { cfg = {repo: $("inRepo").value.trim(), token: $("inToken").value.trim()}; saveCfg(); loadAll(); });
 $("btnCfgClear").addEventListener("click", () => { cfg = {repo: cfg.repo}; saveCfg(); $("inToken").value = ""; setMsg("Jeton effacé de ce navigateur."); });
 $("more").addEventListener("click", () => { shown += PAGE; render(); });
-["fText", "fStatut", "fDep", "fApe", "fCaMin", "fCaMax", "fAge", "fSite", "fSort", "fCalib", "fScore", "fFiliale", "fPhysique", "fOrigine"].forEach((id) =>
+["fText", "fStatut", "fDep", "fApe", "fCaMin", "fCaMax", "fAge", "fSite", "fSort", "fCalib", "fScore", "fFiliale", "fPhysique", "fOrigine", "fZone", "fSansCa"].forEach((id) =>
   $(id).addEventListener("input", () => { shown = PAGE; touched.clear(); render(); }));
 window.addEventListener("beforeunload", (e) => { if (Object.keys(pending).length) { e.preventDefault(); e.returnValue = ""; } });
 
